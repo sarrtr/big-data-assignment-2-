@@ -1,25 +1,18 @@
 #!/bin/bash
-# Start ssh server
-service ssh restart 
+set -euo pipefail
 
-# Starting the services
-bash start-services.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# Creating a virtual environment
+service ssh restart >/dev/null 2>&1 || true
+
+bash "$SCRIPT_DIR/start-services.sh"
+
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install any packages
-pip install -r requirements.txt  
-
-# Package the virtual env.
+pip install --no-cache-dir -r requirements.txt
 venv-pack -o .venv.tar.gz
 
-# Collect data
-bash prepare_data.sh
-
-# Run the indexer
-bash index.sh
-
-# Run the ranker
-bash search.sh "this is a query!"
+bash "$SCRIPT_DIR/prepare_data.sh"
+bash "$SCRIPT_DIR/index.sh"
+bash "$SCRIPT_DIR/search.sh" "this is a query"

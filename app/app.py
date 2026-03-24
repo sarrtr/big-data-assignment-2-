@@ -1,13 +1,22 @@
+#!/usr/bin/env python3
 from cassandra.cluster import Cluster
 
-print("hello app")
 
-# Connects to the cassandra server
-cluster = Cluster(['cassandra-server'])
+HOSTS = ["cassandra-server"]
 
-session = cluster.connect()
 
-# displays the available keyspaces
-rows = session.execute('DESC keyspaces')
-for row in rows:
-    print(row)
+def main():
+    cluster = Cluster(HOSTS)
+    session = cluster.connect()
+    try:
+        keyspaces = session.execute("SELECT keyspace_name FROM system_schema.keyspaces")
+        print("Connected to Cassandra. Available keyspaces:")
+        for row in keyspaces:
+            print(row.keyspace_name)
+    finally:
+        session.shutdown()
+        cluster.shutdown()
+
+
+if __name__ == "__main__":
+    main()

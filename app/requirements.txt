@@ -1,7 +1,7 @@
 cassandra-driver
 venv-pack
-pyarrow
-fastparquet
+# pyarrow
+# fastparquet
 pathvalidate
 pyspark
-tqdm
+# tqdm

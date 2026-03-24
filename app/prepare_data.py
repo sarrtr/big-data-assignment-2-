@@ -1,33 +1,84 @@
+import os
 import re
+import shutil
+from pathlib import Path
+
+from pathvalidate import sanitize_filename
 from pyspark.sql import SparkSession
 
-spark = SparkSession.builder.appName('data preparation').getOrCreate()
-sc = spark.sparkContext
 
-df = spark.read.parquet("/a.parquet")
-n = 1000
-df = df.select(['id', 'title', 'text']).limit(n)
+def find_parquet_path() -> Path:
+    env_path = os.environ.get("PARQUET_PATH")
+    candidates = []
+    if env_path:
+        candidates.append(Path(env_path))
 
-def write_to_hdfs(row):
-    safe_title = re.sub(r'[^\w\s\-()]', '', row.title).replace(' ', '_')
-    filename = f"/data/{row.id}_{safe_title}.txt"
-    fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(sc._jsc.hadoopConfiguration())
-    path = sc._jvm.org.apache.hadoop.fs.Path(filename)
-    out = fs.create(path, True)
-    out.write(row.text.encode('utf-8'))
-    out.close()
+    here = Path(__file__).resolve().parent
+    candidates.extend(
+        [
+            here.parent / "a.parquet",
+            here / "a.parquet",
+            Path.cwd() / "a.parquet",
+            Path("/workspace/a.parquet"),
+            Path("/app/a.parquet"),
+        ]
+    )
 
-df.foreach(write_to_hdfs)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
 
-data_rdd = sc.wholeTextFiles("/data")
+    raise FileNotFoundError("a.parquet was not found in any expected location")
 
-def parse_filename(path):
-    fname = path.split('/')[-1]
-    doc_id = fname.split('_')[0]
-    doc_title = '_'.join(fname.split('_')[1:]).replace('.txt', '')
-    return (doc_id, doc_title)
 
-lines_rdd = data_rdd.map(lambda kv: f"{parse_filename(kv[0])[0]}\t{parse_filename(kv[0])[1]}\t{kv[1]}")
-lines_rdd.saveAsTextFile("/input/data", compressionCodecClass=None)
+def clean_text(value):
+    if value is None:
+        return ""
+    return str(value).replace("\r", " ").replace("\n", " ").replace("\t", " ").strip()
 
-spark.stop()
+
+def main():
+    spark = SparkSession.builder.appName("data preparation").getOrCreate()
+    try:
+        parquet_path = find_parquet_path()
+        data_dir = Path(__file__).resolve().parent / "data"
+        shutil.rmtree(data_dir, ignore_errors=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        df = (
+            spark.read.parquet(f"file://{parquet_path}")
+            .select("id", "title", "text")
+            .limit(1000)
+            .fillna({"title": "", "text": ""})
+        )
+
+        rows = df.collect()
+        if not rows:
+            raise RuntimeError("No rows were read from parquet file")
+
+        input_lines = []
+        for row in rows:
+            doc_id = clean_text(row["id"])
+            title = clean_text(row["title"])
+            text = clean_text(row["text"])
+            if not doc_id:
+                continue
+
+            safe_title = sanitize_filename(title) if title else "untitled"
+            safe_title = re.sub(r"_+", "_", safe_title).strip("_") or "untitled"
+
+            local_file = data_dir / f"{doc_id}_{safe_title}.txt"
+            local_file.write_text(text, encoding="utf-8")
+            input_lines.append(f"{doc_id}\t{title}\t{text}")
+
+        if not input_lines:
+            raise RuntimeError("All parquet rows were filtered out")
+
+        input_rdd = spark.sparkContext.parallelize(input_lines, 1)
+        input_rdd.saveAsTextFile("/input/data")
+    finally:
+        spark.stop()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,35 +1,27 @@
 #!/bin/bash
-# starting HDFS daemons
+set -euo pipefail
+
+HADOOP_HOME=${HADOOP_HOME:-/opt/hadoop-3.3.6}
+SPARK_JARS_DIR=/apps/spark/jars
+
 $HADOOP_HOME/sbin/start-dfs.sh
-
-# starting Yarn daemons
 $HADOOP_HOME/sbin/start-yarn.sh
+mapred --daemon start historyserver || true
 
-# Start mapreduce history server
-mapred --daemon start historyserver
+sleep 5
 
-# track process IDs of services
-jps -lm
+hdfs dfsadmin -safemode leave || true
 
-# subtool to perform administrator functions on HDFS
-hdfs dfsadmin -report
-
-# If namenode in safemode then leave it
-hdfs dfsadmin -safemode leave
-
-# create a directory for spark apps in HDFS
-hdfs dfs -mkdir -p /apps/spark/jars
-hdfs dfs -chmod 744 /apps/spark/jars
-
-# Copy all jars to HDFS
-hdfs dfs -put /usr/local/spark/jars/* /apps/spark/jars/
-hdfs dfs -chmod +rx /apps/spark/jars/
-
-# print version of Scala of Spark
-scala -version
-
-# track process IDs of services
-jps -lm
-
-# Create a directory for root user on HDFS
+hdfs dfs -mkdir -p "$SPARK_JARS_DIR"
 hdfs dfs -mkdir -p /user/root
+hdfs dfs -mkdir -p /tmp/indexer
+hdfs dfs -mkdir -p /indexer
+hdfs dfs -mkdir -p /input
+
+# Copy Spark jars only once; ignore errors if they already exist
+for jar in /usr/local/spark/jars/*.jar; do
+  hdfs dfs -put -f "$jar" "$SPARK_JARS_DIR/" >/dev/null 2>&1 || true
+done
+
+jps -lm || true
+hdfs dfs -ls / || true

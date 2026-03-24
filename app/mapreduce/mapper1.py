@@ -1,23 +1,32 @@
-#!/usr/bin/env python
-import sys
+#!/usr/bin/env python3
 import re
+import sys
+
+TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 for line in sys.stdin:
-    line = line.strip()
-    parts = line.split('\t')
+    line = line.rstrip("\n")
+    if not line:
+        continue
+
+    parts = line.split("\t", 2)
     if len(parts) < 3:
         continue
-    doc_id = parts[0]
-    doc_title = parts[1]
-    text = parts[2]
-    words = re.findall(r'\w+', text.lower())
+
+    doc_id, doc_title, text = parts
+    doc_id = doc_id.strip()
+    doc_title = doc_title.strip().replace("\t", " ")
+    text = text.strip()
+
+    words = TOKEN_RE.findall(text.lower())
     doc_len = len(words)
 
     print(f"DOC_LEN\t{doc_id}\t{doc_len}")
+    print(f"DOC_META\t{doc_id}\t{doc_title}")
 
     term_counts = {}
-    for w in words:
-        term_counts[w] = term_counts.get(w, 0) + 1
+    for word in words:
+        term_counts[word] = term_counts.get(word, 0) + 1
 
     for term, cnt in term_counts.items():
         print(f"TERM_TF\t{term}\t{doc_id}\t{cnt}")

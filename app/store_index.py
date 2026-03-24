@@ -1,80 +1,143 @@
+from itertools import islice
+
+from cassandra.cluster import Cluster
+from cassandra.query import BatchStatement
 from pyspark.sql import SparkSession
 
-spark = SparkSession.builder \
-    .appName("LoadIndexToCassandra") \
-    .config("spark.cassandra.connection.host", "cassandra") \
-    .config("spark.sql.extensions", "com.datastax.spark.connector.CassandraSparkExtensions") \
-    .getOrCreate()
 
-sc = spark.sparkContext
+KEYSPACE = "search_engine"
+HOSTS = ["cassandra-server"]
+BATCH_SIZE = 200
 
-lines = sc.textFile("/indexer/part-*")
+
+def ensure_schema(session):
+    session.execute(f"""
+        CREATE KEYSPACE IF NOT EXISTS {KEYSPACE}
+        WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}
+    """)
+    session.set_keyspace(KEYSPACE)
+
+    session.execute("""
+        CREATE TABLE IF NOT EXISTS doc_lengths (
+            doc_id text PRIMARY KEY,
+            length int
+        )
+    """)
+    session.execute("""
+        CREATE TABLE IF NOT EXISTS doc_meta (
+            doc_id text PRIMARY KEY,
+            title text
+        )
+    """)
+    session.execute("""
+        CREATE TABLE IF NOT EXISTS term_df (
+            term text PRIMARY KEY,
+            df int
+        )
+    """)
+    session.execute("""
+        CREATE TABLE IF NOT EXISTS term_index (
+            term text,
+            doc_id text,
+            tf int,
+            PRIMARY KEY (term, doc_id)
+        )
+    """)
+    session.execute("""
+        CREATE TABLE IF NOT EXISTS stats (
+            metric text PRIMARY KEY,
+            value text
+        )
+    """)
+
+
+def insert_many(session, prepared_stmt, rows):
+    batch = BatchStatement()
+    count = 0
+    has_items = False
+    for row in rows:
+        batch.add(prepared_stmt, row)
+        has_items = True
+        count += 1
+        if count % BATCH_SIZE == 0:
+            session.execute(batch)
+            batch = BatchStatement()
+            has_items = False
+    if has_items:
+        session.execute(batch)
+
 
 def parse_line(line):
-    parts = line.split('\t')
-    if parts[0] == "DOC_LEN":
-        return ("DOC_LEN", parts[1], int(parts[2]))
-    elif parts[0] == "TERM_DF":
-        return ("TERM_DF", parts[1], int(parts[2]))
-    elif parts[0] == "TERM_TF":
-        return ("TERM_TF", parts[1], parts[2], int(parts[3]))
-    else:
+    parts = line.split("	")
+    if not parts:
         return None
+    tag = parts[0]
+    if tag == "DOC_LEN" and len(parts) >= 3:
+        return ("DOC_LEN", parts[1], int(parts[2]))
+    if tag == "DOC_META" and len(parts) >= 3:
+        return ("DOC_META", parts[1], "	".join(parts[2:]))
+    if tag == "TERM_DF" and len(parts) >= 3:
+        return ("TERM_DF", parts[1], int(parts[2]))
+    if tag == "TERM_TF" and len(parts) >= 4:
+        return ("TERM_TF", parts[1], parts[2], int(parts[3]))
+    if tag == "STATS" and len(parts) >= 3:
+        return ("STATS", parts[1], "	".join(parts[2:]))
+    return None
 
-parsed = lines.map(parse_line).filter(lambda x: x is not None)
 
-doc_len_rdd = parsed.filter(lambda x: x[0] == "DOC_LEN").map(lambda x: (x[1], x[2]))
-term_df_rdd = parsed.filter(lambda x: x[0] == "TERM_DF").map(lambda x: (x[1], x[2]))
-term_tf_rdd = parsed.filter(lambda x: x[0] == "TERM_TF").map(lambda x: (x[1], x[2], x[3]))
+def main():
+    spark = SparkSession.builder.appName("LoadIndexToCassandra").getOrCreate()
+    try:
+        sc = spark.sparkContext
+        lines = sc.textFile("/indexer/part-*")
+        parsed = lines.map(parse_line).filter(lambda x: x is not None).collect()
 
-df_doc_len = doc_len_rdd.toDF(["doc_id", "length"])
-df_term_df = term_df_rdd.toDF(["term", "df"])
-df_term_tf = term_tf_rdd.toDF(["term", "doc_id", "tf"])
+        doc_lengths = []
+        doc_meta = []
+        term_df = []
+        term_index = []
+        stats = []
 
-spark.sql("""
-CREATE KEYSPACE IF NOT EXISTS search_engine
-WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
-""")
+        for item in parsed:
+            kind = item[0]
+            if kind == "DOC_LEN":
+                _, doc_id, length = item
+                doc_lengths.append((doc_id, int(length)))
+            elif kind == "DOC_META":
+                _, doc_id, title = item
+                doc_meta.append((doc_id, title))
+            elif kind == "TERM_DF":
+                _, term, df = item
+                term_df.append((term, int(df)))
+            elif kind == "TERM_TF":
+                _, term, doc_id, tf = item
+                term_index.append((term, doc_id, int(tf)))
+            elif kind == "STATS":
+                _, metric, value = item
+                stats.append((metric, value))
 
-spark.sql("""
-CREATE TABLE IF NOT EXISTS search_engine.doc_lengths (
-    doc_id text PRIMARY KEY,
-    length int
-)
-""")
+        cluster = Cluster(HOSTS)
+        session = cluster.connect()
+        try:
+            ensure_schema(session)
 
-spark.sql("""
-CREATE TABLE IF NOT EXISTS search_engine.term_df (
-    term text PRIMARY KEY,
-    df int
-)
-""")
+            ps_doc_lengths = session.prepare("INSERT INTO doc_lengths (doc_id, length) VALUES (?, ?)")
+            ps_doc_meta = session.prepare("INSERT INTO doc_meta (doc_id, title) VALUES (?, ?)")
+            ps_term_df = session.prepare("INSERT INTO term_df (term, df) VALUES (?, ?)")
+            ps_term_index = session.prepare("INSERT INTO term_index (term, doc_id, tf) VALUES (?, ?, ?)")
+            ps_stats = session.prepare("INSERT INTO stats (metric, value) VALUES (?, ?)")
 
-spark.sql("""
-CREATE TABLE IF NOT EXISTS search_engine.term_index (
-    term text,
-    doc_id text,
-    tf int,
-    PRIMARY KEY (term, doc_id)
-)
-""")
+            insert_many(session, ps_doc_lengths, doc_lengths)
+            insert_many(session, ps_doc_meta, doc_meta)
+            insert_many(session, ps_term_df, term_df)
+            insert_many(session, ps_term_index, term_index)
+            insert_many(session, ps_stats, stats)
+        finally:
+            session.shutdown()
+            cluster.shutdown()
+    finally:
+        spark.stop()
 
-df_doc_len.write \
-    .format("org.apache.spark.sql.cassandra") \
-    .mode("append") \
-    .options(table="doc_lengths", keyspace="search_engine") \
-    .save()
 
-df_term_df.write \
-    .format("org.apache.spark.sql.cassandra") \
-    .mode("append") \
-    .options(table="term_df", keyspace="search_engine") \
-    .save()
-
-df_term_tf.write \
-    .format("org.apache.spark.sql.cassandra") \
-    .mode("append") \
-    .options(table="term_index", keyspace="search_engine") \
-    .save()
-
-spark.stop()
+if __name__ == "__main__":
+    main()
