@@ -5,11 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PARQUET_PATH="${PARQUET_PATH:-$PROJECT_ROOT/a.parquet}"
 
-if [[ ! -f "$PARQUET_PATH" ]]; then
-  echo "Cannot find a.parquet at: $PARQUET_PATH" >&2
-  exit 1
-fi
-
 source "$SCRIPT_DIR/.venv/bin/activate"
 export PYSPARK_DRIVER_PYTHON="$(which python)"
 unset PYSPARK_PYTHON

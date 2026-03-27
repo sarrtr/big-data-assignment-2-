@@ -18,7 +18,6 @@ hdfs dfs -mkdir -p /tmp/indexer
 hdfs dfs -mkdir -p /indexer
 hdfs dfs -mkdir -p /input
 
-# Copy Spark jars only once; ignore errors if they already exist
 for jar in /usr/local/spark/jars/*.jar; do
   hdfs dfs -put -f "$jar" "$SPARK_JARS_DIR/" >/dev/null 2>&1 || true
 done

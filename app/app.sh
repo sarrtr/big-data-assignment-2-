@@ -11,8 +11,11 @@ bash "$SCRIPT_DIR/start-services.sh"
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --no-cache-dir -r requirements.txt
+rm -f .venv.tar.gz
 venv-pack -o .venv.tar.gz
 
 bash "$SCRIPT_DIR/prepare_data.sh"
 bash "$SCRIPT_DIR/index.sh"
-bash "$SCRIPT_DIR/search.sh" "this is a query"
+bash "$SCRIPT_DIR/search.sh" "English books"
+
+sleep infinity
