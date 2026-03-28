@@ -6,30 +6,6 @@ from pathlib import Path
 from pathvalidate import sanitize_filename
 from pyspark.sql import SparkSession
 
-# def find_parquet_path() -> Path:
-#     env_path = os.environ.get("PARQUET_PATH")
-#     candidates = []
-#     if env_path:
-#         candidates.append(Path(env_path))
-
-#     here = Path(__file__).resolve().parent
-#     candidates.extend(
-#         [
-#             here.parent / "a.parquet",
-#             here / "a.parquet",
-#             Path.cwd() / "a.parquet",
-#             Path("/workspace/a.parquet"),
-#             Path("/app/a.parquet"),
-#         ]
-#     )
-
-#     for candidate in candidates:
-#         if candidate.exists():
-#             return candidate.resolve()
-
-#     raise FileNotFoundError("a.parquet was not found in any expected location")
-
-
 def clean_text(value):
     if value is None:
         return ""
